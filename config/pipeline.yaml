@@ -1,0 +1,26 @@
+experiment:
+  project_name: "cattle_sickness_detection"
+  seed: 42
+
+  dataset:
+    kaggle_dataset: "shivamagarwal29/cow-lumpy-disease-dataset"
+    base_dir: "data/processed"
+    raw_data_dir: "data/raw"
+    source_dirs:
+      healthy: "Healthy Cows"    # ✅ Fixed: exact Kaggle folder names
+      lumpy: "Lumpy Cows"
+
+  splits:
+    train: 0.70                  # ✅ Fixed: train/val/test now indented under splits
+    val: 0.15
+    test: 0.15
+
+  model:
+    img_size: [224, 224]
+    batch_size: 32
+    learning_rate: 0.001
+    learning_rate_phase_2: 0.00001  # ✅ Added: trainer.py needs this
+    dropout_rate: 0.5
+    epochs_phase_1: 15
+    epochs_phase_2: 10
+    patience: 5
