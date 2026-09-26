@@ -14,6 +14,41 @@ Healthy/LSD answer; the API reports predictions inside `[0.35, 0.65]` as
 `"Uncertain"` rather than forcing a call, but this is not a substitute for
 veterinary diagnosis. Treat all output as a screening aid, not a diagnosis.
 
+## Results
+
+Trained on the Kaggle `cow-lumpy-disease-dataset` (654 train / 140 val / 142
+test images). Two-phase run: 15 epochs with the backbone frozen, then 6 epochs
+fine-tuning the backbone's last 30 layers (stopped early on `val_loss`).
+Evaluated on the checkpoint with the best validation AUC across the full run.
+
+![Training and validation AUC/accuracy per epoch](docs/training_performance.png)
+
+| Metric | Test set (142 held-out images) |
+|---|---|
+| AUC | 0.923 |
+| Accuracy | 84.5% |
+| Loss | 0.380 |
+
+Confusion matrix and per-class breakdown (threshold 0.5, via `scripts/evaluate.py`):
+
+| | Predicted Healthy | Predicted Lumpy |
+|---|---|---|
+| **Actual Healthy** (78) | 62 | 16 |
+| **Actual Lumpy** (64) | 6 | 58 |
+
+| Class | Precision | Recall | F1 |
+|---|---|---|---|
+| Healthy | 0.912 | 0.795 | 0.849 |
+| Lumpy | 0.784 | 0.906 | 0.841 |
+
+Errors are fairly balanced between the two classes rather than one-sided.
+Lumpy recall (90.6%) is arguably the more important number for a screening
+tool - missing an actual case is worse than a false alarm a vet can rule out.
+The main lever for closing the remaining gap further is more training data;
+936 total images is small for a CNN trained from scratch on top of a frozen
+backbone. Full per-epoch metrics are in `models/training_history.json` after
+any training run, and in MLflow (`mlflow ui --backend-store-uri sqlite:///mlflow.db`).
+
 ## Architecture
 
 ```
@@ -25,8 +60,9 @@ Input (224x224x3)
 
 Training runs in two phases: phase 1 trains only the classification head with
 the backbone frozen; phase 2 unfreezes the backbone's last 30 layers and
-fine-tunes at a lower learning rate. See `src/models/builder.py` and
-`src/engine/trainer.py`.
+fine-tunes at a lower learning rate. A single `ModelCheckpoint` is shared
+across both phases so "best" is judged over the whole run, not reset at the
+phase boundary. See `src/models/builder.py` and `src/engine/trainer.py`.
 
 ## Project layout
 
@@ -38,6 +74,7 @@ src/engine/trainer.py   Two-phase training loop
 src/utils/              Config loading, seed locking
 src/main.py             FastAPI inference server
 train.py                Training entry point (CLI)
+scripts/evaluate.py     Confusion matrix / precision-recall breakdown on the test set
 tests/                  Unit tests (see Testing below)
 ```
 
@@ -61,9 +98,19 @@ python train.py --skip-download --skip-split  # reuse an existing data/processed
 
 Hyperparameters and the Kaggle dataset ID live in `config/pipeline.yaml`.
 Runs are logged to MLflow (`mlflow ui --backend-store-uri sqlite:///mlflow.db`
-to view them locally); the best checkpoint is saved to
-`${MODEL_SAVE_PATH}/{project_name}_best.keras` and the end-of-run model to
-`${MODEL_SAVE_PATH}/{project_name}_final.keras`.
+to view them locally); the best checkpoint (by validation AUC, across both
+training phases) is saved to `${MODEL_SAVE_PATH}/{project_name}_best.keras`
+and the end-of-run model to `${MODEL_SAVE_PATH}/{project_name}_final.keras`.
+A `training_history.json` with the full per-epoch metrics is written
+alongside them, and the printed/logged test metrics are evaluated on the best
+checkpoint - the same one `src/main.py` serves.
+
+For a detailed breakdown of a trained model (confusion matrix, precision,
+recall, F1 per class rather than just accuracy):
+
+```bash
+python scripts/evaluate.py
+```
 
 ## Serving
 
@@ -114,7 +161,8 @@ credentials required:
 - `test_pipeline.py` - tf.data pipeline shapes, dtype, and unscaled [0, 255] pixel range
 - `test_builder.py` - model architecture and compile config, with the EfficientNetV2B0
   backbone mocked out so tests don't need network access to download ImageNet weights
-- `test_trainer.py` - the two-phase training loop and checkpoint saving, on tiny synthetic data
+- `test_trainer.py` - the two-phase training loop, checkpoint saving, and a regression
+  test guarding that the checkpoint's "best so far" persists across the phase boundary
 - `test_main.py` - the `/predict` API, including the confidence-band boundaries, using a
   small model with fixed weights so predictions are deterministic
 
