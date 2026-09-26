@@ -18,7 +18,18 @@ def run_training(model, train_ds, val_ds, cfg):
     save_dir.mkdir(parents=True, exist_ok=True)
     best_model_path = save_dir / f"{cfg.project_name}_best.keras"
 
-    def callbacks():
+    # Shared across both phases so "best" is judged over the whole run. A
+    # fresh ModelCheckpoint per phase would forget phase 1's best val_auc and
+    # let a worse phase-2 epoch overwrite it just for beating phase 2's own
+    # from-scratch baseline.
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        filepath=str(best_model_path),
+        monitor="val_auc",
+        mode="max",
+        save_best_only=True,
+    )
+
+    def phase_callbacks():
         return [
             tf.keras.callbacks.EarlyStopping(
                 monitor="val_loss",
@@ -30,12 +41,7 @@ def run_training(model, train_ds, val_ds, cfg):
                 factor=0.5,
                 patience=max(2, cfg.patience // 2),
             ),
-            tf.keras.callbacks.ModelCheckpoint(
-                filepath=str(best_model_path),
-                monitor="val_auc",
-                mode="max",
-                save_best_only=True,
-            ),
+            checkpoint,
         ]
 
     logger.info("Phase 1: training classification head...")
@@ -43,7 +49,7 @@ def run_training(model, train_ds, val_ds, cfg):
         train_ds,
         validation_data=val_ds,
         epochs=cfg.epochs_phase_1,
-        callbacks=callbacks(),
+        callbacks=phase_callbacks(),
     )
 
     logger.info("Phase 2: fine-tuning backbone...")
@@ -66,7 +72,7 @@ def run_training(model, train_ds, val_ds, cfg):
         train_ds,
         validation_data=val_ds,
         epochs=cfg.epochs_phase_2,
-        callbacks=callbacks(),
+        callbacks=phase_callbacks(),
     )
 
     logger.info("Training complete.")

@@ -11,11 +11,13 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
 
 import mlflow
+import tensorflow as tf
 from dotenv import load_dotenv
 
 from src.data.download import download_data
@@ -75,17 +77,44 @@ def main() -> None:
         )
 
         history = run_training(model, train_ds, val_ds, cfg)
-        mlflow.log_metrics({key: values[-1] for key, values in history.history.items()})
 
-        test_loss, test_accuracy, test_auc = model.evaluate(test_ds, verbose=0)
-        mlflow.log_metrics({"test_loss": test_loss, "test_accuracy": test_accuracy, "test_auc": test_auc})
-        logger.info("Test set - loss: %.4f accuracy: %.4f auc: %.4f", test_loss, test_accuracy, test_auc)
+        # Log the full per-epoch curve, not just the final value, so training
+        # progress is visible in the MLflow UI.
+        for epoch, values in enumerate(zip(*history.history.values())):
+            mlflow.log_metrics(dict(zip(history.history.keys(), values)), step=epoch)
 
         save_dir = Path(os.environ.get("MODEL_SAVE_PATH", "models"))
         save_dir.mkdir(parents=True, exist_ok=True)
         final_path = save_dir / f"{cfg.project_name}_final.keras"
         model.save(final_path)
         logger.info("Final model saved to %s", final_path)
+
+        # Evaluate the checkpointed best model, not the in-memory one: the
+        # last model.fit() call only restores its own phase's best weights
+        # (EarlyStopping's restore_best_weights is scoped per phase), while
+        # ModelCheckpoint tracks the true best across the whole run - and
+        # that best.keras file is what src/main.py actually serves.
+        best_path = save_dir / f"{cfg.project_name}_best.keras"
+        eval_model = tf.keras.models.load_model(best_path) if best_path.exists() else model
+        test_loss, test_accuracy, test_auc = eval_model.evaluate(test_ds, verbose=0)
+        mlflow.log_metrics({"test_loss": test_loss, "test_accuracy": test_accuracy, "test_auc": test_auc})
+        logger.info("Test set (best checkpoint) - loss: %.4f accuracy: %.4f auc: %.4f", test_loss, test_accuracy, test_auc)
+
+        # Persisted separately from MLflow so the README chart can be
+        # regenerated without needing a running MLflow instance.
+        history_path = save_dir / "training_history.json"
+        history_path.write_text(
+            json.dumps(
+                {
+                    "epochs": history.history,
+                    "test_loss": test_loss,
+                    "test_accuracy": test_accuracy,
+                    "test_auc": test_auc,
+                },
+                indent=2,
+            )
+        )
+        logger.info("Training history saved to %s", history_path)
 
     logger.info("Training complete.")
 

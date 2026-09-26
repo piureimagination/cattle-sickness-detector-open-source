@@ -22,5 +22,5 @@ experiment:
     learning_rate_phase_2: 0.00001  # ✅ Added: trainer.py needs this
     dropout_rate: 0.5
     epochs_phase_1: 15
-    epochs_phase_2: 10
+    epochs_phase_2: 25   # was 10 - val_loss was still improving every epoch when phase 2 hit that ceiling
     patience: 5
